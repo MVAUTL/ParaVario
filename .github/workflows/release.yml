@@ -18,18 +18,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Installer le SDK Android
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          set -euo pipefail
+          sdk="$RUNNER_TEMP/paravario-sdk"
+          mkdir -p "$sdk/cmdline-tools"
+          curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o "$RUNNER_TEMP/android-tools.zip"
+          unzip -q "$RUNNER_TEMP/android-tools.zip" -d "$sdk/cmdline-tools"
+          manager="$sdk/cmdline-tools/cmdline-tools/bin/sdkmanager"
+          (yes || true) | "$manager" --sdk_root="$sdk" --licenses >/dev/null
+          "$manager" --sdk_root="$sdk" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
       - name: Compiler et signer l’APK
         env:
           KEYSTORE_BASE64: ${{ secrets.PARAVARIO_KEYSTORE }}
         run: |
           set -euo pipefail
-          : "${KEYSTORE_BASE64:?Configurez le secret PARAVARIO_KEYSTORE}"
           tools="$ANDROID_HOME/build-tools/35.0.0"
           android="$ANDROID_HOME/platforms/android-35/android.jar"
           stage="$(mktemp -d)"
           trap 'rm -rf "$stage"' EXIT
-          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$stage/signing.jks"
           mkdir "$stage/classes"
           version=$((GITHUB_RUN_NUMBER + 1))
           "$tools/aapt2" compile --dir res -o "$stage/resources.zip"
@@ -41,6 +48,8 @@ jobs:
           "$tools/d8" --min-api 30 --lib "$android" --output "$stage" "$stage/classes.jar"
           jar uf "$stage/base.apk" -C "$stage" classes.dex
           "$tools/zipalign" -f 4 "$stage/base.apk" "$stage/aligned.apk"
+          : "${KEYSTORE_BASE64:?Configurez le secret PARAVARIO_KEYSTORE}"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$stage/signing.jks"
           "$tools/apksigner" sign --ks "$stage/signing.jks" --ks-pass pass:android \
             --out ParaVario.apk "$stage/aligned.apk"
           "$tools/apksigner" verify ParaVario.apk
@@ -56,3 +65,4 @@ jobs:
             gh release create "$tag" ParaVario.apk --target "$GITHUB_SHA" \
               --title "ParaVario $tag" --generate-notes
           fi
+
